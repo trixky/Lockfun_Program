@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+
+# Rust/Anchor build artifacts
+target/
+
+# Anchor
+.anchor/
+
+# Solana test validator
+test-ledger/
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
