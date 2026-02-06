@@ -1,14 +1,27 @@
-# B3drok Solana Program
+# lock.fun
 
-Permissionless writing on Solana with flat fees.
+**lock.fun – On-Chain Token Locking Protocol**
 
-## Overview
+Lock.fun is a fully on-chain token locking protocol on Solana mainnet. It provides a minimal mechanism for time-based token locks, primarily used by Pump.fun token launches.
 
-This Anchor program allows anyone to write messages on-chain with:
-- Unique incremental message IDs
-- Timestamps
-- Optional parent references (for comments/replies)
-- Configurable flat fees (default: 0)
+Locks are enforced entirely by the smart contract. All lock events are publicly accessible on-chain.
+
+A thin frontend is provided for data visualization and interacts directly with Solana RPCs. The protocol has no backend, no off-chain enforcement, and a deliberately small on-chain footprint, resulting in negligible fees.
+
+Lock.fun is infrastructure. Verification is on-chain. Interpretation is left to the observer.
+
+## Lock account: minimal layout
+
+The lock account is intentionally minimal. It has only **four core fields** (plus a few internal fields for the program):
+
+| Field   | Type   | Description                    |
+|--------|--------|--------------------------------|
+| **token**   | `Pubkey` | Token mint address             |
+| **owner**   | `Pubkey` | Account that locked the tokens |
+| **amount**  | `u64`    | Quantity of tokens locked      |
+| **unlock_timestamp** | `i64` | Unix timestamp when tokens can be unlocked |
+
+This is verified in the program: see `Lock` in `programs/timelock_supply/src/lib.rs` (fields `mint`, `owner`, `amount`, `unlock_timestamp`).
 
 ## Prerequisites
 
@@ -33,16 +46,19 @@ anchor build
 ## Test
 
 Start a local validator:
+
 ```bash
 solana-test-validator
 ```
 
 In another terminal, run tests:
+
 ```bash
 anchor test
 ```
 
 Or run tests with a fresh validator:
+
 ```bash
 anchor test --skip-local-validator
 ```
@@ -50,110 +66,50 @@ anchor test --skip-local-validator
 ## Deploy
 
 ### Localnet
+
 ```bash
 anchor deploy
 ```
 
 ### Devnet
+
 ```bash
 anchor deploy --provider.cluster devnet
 ```
 
-## Program Structure
+## Program structure
 
 ### Accounts
 
 - **GlobalState** (PDA: `["global_state"]`)
-  - `counter`: Incremental message ID counter
-  - `fee_lamports`: Flat fee per write (0 = free)
   - `authority`: Admin wallet
+  - `lock_counter`: Incremental lock ID counter
 
-- **FeeVault** (PDA: `["fee_vault"]`)
-  - System account holding collected fees
+- **Lock** (PDA: `["lock", lock_id]`)
+  - `id`: Unique lock ID
+  - `owner`: Account that locked the tokens
+  - `mint`: Token mint address
+  - `amount`: Quantity of tokens locked
+  - `unlock_timestamp`: Unix timestamp when tokens can be unlocked
+  - `created_at`: Lock creation timestamp
+  - `vault_bump`: Vault PDA bump
+  - `is_unlocked`: Whether the lock has been unlocked
 
-- **Message** (PDA: `["message", id]`)
-  - `id`: Unique message ID
-  - `parent_id`: Optional parent message (for replies)
-  - `timestamp`: Unix timestamp
-  - `writer`: Author's public key
-  - `content`: Message text (max 280 chars)
+- **Vault**: PDA-owned token account holding locked tokens (seeds: `["vault", lock_id]`)
 
 ### Instructions
 
-1. **initialize(initial_fee_lamports)**
-   - Creates GlobalState and FeeVault
-   - Sets authority and initial fee
+1. **initialize**
+   - Creates GlobalState. Authority only.
 
-2. **write(content, parent_id)**
-   - Permissionless
-   - Creates new Message account
-   - Pays fee if > 0
+2. **lock(amount, unlock_timestamp)**
+   - Creates a Lock account and transfers tokens from the owner to the vault PDA.
+   - Only the owner can unlock after `unlock_timestamp`.
 
-3. **set_fee(new_fee_lamports)**
-   - Authority only
-   - Updates write fee (can be 0)
-
-4. **withdraw_fees(amount)**
-   - Authority only
-   - Withdraw from fee vault
-   - Amount = 0 withdraws all
-
-## Frontend Integration
-
-### Fetch messages by user
-```typescript
-const messages = await program.account.message.all([
-  {
-    memcmp: {
-      offset: 8 + 8 + 9 + 8, // discriminator + id + parent_id + timestamp
-      bytes: userPublicKey.toBase58(),
-    },
-  },
-]);
-```
-
-### Fetch replies to a message
-```typescript
-const parentIdBuffer = Buffer.alloc(9);
-parentIdBuffer[0] = 1; // Some(...)
-new anchor.BN(parentMessageId).toArrayLike(Buffer, "le", 8).copy(parentIdBuffer, 1);
-
-const replies = await program.account.message.all([
-  {
-    memcmp: {
-      offset: 8 + 8, // discriminator + id
-      bytes: bs58.encode(parentIdBuffer),
-    },
-  },
-]);
-```
+3. **unlock**
+   - Owner only, after `unlock_timestamp`.
+   - Transfers tokens from the vault back to the owner and marks the lock as unlocked.
 
 ## License
 
 MIT
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
