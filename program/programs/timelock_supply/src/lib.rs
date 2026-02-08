@@ -81,6 +81,12 @@ pub mod timelock_supply {
     /// - Only the original owner can unlock
     /// - Transfers tokens from vault back to owner
     pub fn unlock(ctx: Context<UnlockTokens>) -> Result<()> {
+        // Prevent duplicate mutable accounts attack
+        require!(
+            ctx.accounts.vault.key() != ctx.accounts.owner_token_account.key(),
+            ErrorCode::DuplicateAccounts
+        );
+
         let lock = &ctx.accounts.lock;
 
         require!(!lock.is_unlocked, ErrorCode::AlreadyUnlocked);
@@ -116,6 +122,79 @@ pub mod timelock_supply {
         lock.is_unlocked = true;
 
         msg!("Unlocked {} tokens from lock #{}", amount, lock.id);
+
+        Ok(())
+    }
+
+    /// Add more tokens to an existing lock
+    /// - Only the lock owner can add tokens
+    /// - Lock must not be unlocked
+    /// - Mint must match the existing lock
+    pub fn top_up(ctx: Context<TopUpLock>, additional_amount: u64) -> Result<()> {
+        // Prevent duplicate mutable accounts attack
+        require!(
+            ctx.accounts.vault.key() != ctx.accounts.owner_token_account.key(),
+            ErrorCode::DuplicateAccounts
+        );
+
+        require!(additional_amount > 0, ErrorCode::AmountZero);
+
+        let lock = &mut ctx.accounts.lock;
+
+        require!(!lock.is_unlocked, ErrorCode::AlreadyUnlocked);
+
+        let decimals = ctx.accounts.mint.decimals;
+
+        // Transfer additional tokens from owner to vault
+        token_interface::transfer_checked(
+            CpiContext::new(
+                ctx.accounts.token_program.to_account_info(),
+                TransferChecked {
+                    from: ctx.accounts.owner_token_account.to_account_info(),
+                    mint: ctx.accounts.mint.to_account_info(),
+                    to: ctx.accounts.vault.to_account_info(),
+                    authority: ctx.accounts.owner.to_account_info(),
+                },
+            ),
+            additional_amount,
+            decimals,
+        )?;
+
+        // Update lock amount
+        lock.amount = lock.amount.checked_add(additional_amount).unwrap();
+
+        msg!(
+            "Added {} tokens to lock #{} (new total: {})",
+            additional_amount,
+            lock.id,
+            lock.amount
+        );
+
+        Ok(())
+    }
+
+    /// Extend the unlock timestamp of an existing lock
+    /// - Only the lock owner can extend
+    /// - Lock must not be unlocked
+    /// - New timestamp must be greater than current timestamp (can only extend, not shorten)
+    pub fn extend(ctx: Context<ExtendLock>, new_unlock_timestamp: i64) -> Result<()> {
+        let lock = &mut ctx.accounts.lock;
+
+        require!(!lock.is_unlocked, ErrorCode::AlreadyUnlocked);
+        require!(
+            new_unlock_timestamp > lock.unlock_timestamp,
+            ErrorCode::CannotShortenTimestamp
+        );
+
+        let old_timestamp = lock.unlock_timestamp;
+        lock.unlock_timestamp = new_unlock_timestamp;
+
+        msg!(
+            "Extended lock #{} unlock timestamp from {} to {}",
+            lock.id,
+            old_timestamp,
+            new_unlock_timestamp
+        );
 
         Ok(())
     }
@@ -267,6 +346,57 @@ pub struct UnlockTokens<'info> {
     pub token_program: Interface<'info, TokenInterface>,
 }
 
+#[derive(Accounts)]
+pub struct TopUpLock<'info> {
+    #[account(
+        mut,
+        seeds = [LOCK_SEED, &lock.id.to_le_bytes()],
+        bump,
+        has_one = owner @ ErrorCode::Unauthorized,
+        has_one = mint @ ErrorCode::InvalidMint
+    )]
+    pub lock: Account<'info, Lock>,
+
+    /// Vault holding the locked tokens
+    #[account(
+        mut,
+        seeds = [VAULT_SEED, &lock.id.to_le_bytes()],
+        bump = lock.vault_bump
+    )]
+    pub vault: InterfaceAccount<'info, TokenAccount>,
+
+    /// The token mint (must match lock.mint)
+    pub mint: InterfaceAccount<'info, Mint>,
+
+    /// Owner's token account (source of additional tokens)
+    #[account(
+        mut,
+        token::mint = mint,
+        token::authority = owner
+    )]
+    pub owner_token_account: InterfaceAccount<'info, TokenAccount>,
+
+    /// Lock owner who wants to add tokens
+    #[account(mut)]
+    pub owner: Signer<'info>,
+
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
+#[derive(Accounts)]
+pub struct ExtendLock<'info> {
+    #[account(
+        mut,
+        seeds = [LOCK_SEED, &lock.id.to_le_bytes()],
+        bump,
+        has_one = owner @ ErrorCode::Unauthorized
+    )]
+    pub lock: Account<'info, Lock>,
+
+    /// Lock owner who wants to extend the duration
+    pub owner: Signer<'info>,
+}
+
 // ============================================================================
 // Errors
 // ============================================================================
@@ -285,4 +415,8 @@ pub enum ErrorCode {
     AlreadyUnlocked,
     #[msg("Invalid mint")]
     InvalidMint,
+    #[msg("Cannot shorten unlock timestamp - can only extend")]
+    CannotShortenTimestamp,
+    #[msg("Duplicate accounts detected - vault and owner token account must be different")]
+    DuplicateAccounts,
 }

@@ -110,6 +110,17 @@ anchor deploy --provider.cluster devnet
    - Owner only, after `unlock_timestamp`.
    - Transfers tokens from the vault back to the owner and marks the lock as unlocked.
 
+4. **top_up(additional_amount)**
+   - Adds more tokens to an existing lock.
+   - Owner only, lock must not be unlocked.
+   - Mint must match the existing lock.
+   - Updates the lock's total amount.
+
+5. **extend(new_unlock_timestamp)**
+   - Extends the unlock timestamp of an existing lock.
+   - Owner only, lock must not be unlocked.
+   - New timestamp must be greater than current timestamp (can only extend, not shorten).
+
 ## License
 
 MIT

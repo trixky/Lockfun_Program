@@ -1,0 +1,40 @@
+{
+  "name": "b3drok",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Permissionless Writing with Flat Fees on Solana",
+  "scripts": {
+    "sync": "./sync.sh",
+    "sync:only": "./sync.sh --sync-only",
+    "build:program": "cd program && anchor build",
+    "test:program": "cd program && anchor test",
+    "dev:client": "cd client && npm run dev",
+    "build:client": "cd client && npm run build"
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
