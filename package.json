@@ -1,9 +1,9 @@
 {
-  "name": "b3drok",
+  "name": "lockfun-contract",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Permissionless Writing with Flat Fees on Solana",
+  "description": "Lock.fun - On-Chain Token Locking Protocol for Solana",
   "scripts": {
     "sync": "./sync.sh",
     "sync:only": "./sync.sh --sync-only",

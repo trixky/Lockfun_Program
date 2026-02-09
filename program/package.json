@@ -1,8 +1,8 @@
 {
-  "name": "b3drok-program",
+  "name": "lockfun-program",
   "version": "0.1.0",
   "type": "module",
-  "description": "Solana Anchor program for permissionless writing with flat fees",
+  "description": "Lock.fun - Solana Anchor program for on-chain token locking",
   "scripts": {
     "lint:fix": "prettier */*.js \"*/**/*{.js,.ts}\" -w",
     "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check",

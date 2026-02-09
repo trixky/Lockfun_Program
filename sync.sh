@@ -167,8 +167,8 @@ const DEFAULT_RPC_ENDPOINTS = {
 	LOCAL: 'http://localhost:8899',
 	DEVNET: 'https://api.devnet.solana.com',
 	TESTNET: 'https://api.testnet.solana.com',
-	MAINNET: 'https://mainnet.helius-rpc.com/?api-key=92705105-0289-44ec-8492-371710c391ed'
-	// MAINNET: 'https://api.mainnet.solana.com'
+	MAINNET: 'https://api.mainnet.solana.com'
+	// MAINNET: 'https://mainnet.helius-rpc.com/?api-key=YOUR_API_KEY_HERE' // Use custom RPC if needed
 } as const;
 
 /** Get the configured network from environment */
