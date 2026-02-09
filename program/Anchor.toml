@@ -4,14 +4,14 @@
 resolution = true
 skip-lint = false
 
-[programs.mainnet]
-lockfun = "GaVb9PQr9eTnFe6zVAKwUyfCCDbp7dR1KqdJrFnQRexQ"
-
 [programs.devnet]
 lockfun = "GaVb9PQr9eTnFe6zVAKwUyfCCDbp7dR1KqdJrFnQRexQ"
 
 [programs.localnet]
-lockfun = "GaVb9PQr9eTnFe6zVAKwUyfCCDbp7dR1KqdJrFnQRexQ"
+lockfun = "57MA23vJ2yS9FV2oL4bz5GcKoXWXGhc25R61PU8dgefD"
+
+[programs.mainnet]
+lockfun = "57MA23vJ2yS9FV2oL4bz5GcKoXWXGhc25R61PU8dgefD"
 
 [registry]
 url = "https://api.apr.dev"

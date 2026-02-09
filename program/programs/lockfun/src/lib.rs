@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{self, Mint, TokenAccount, TokenInterface, TransferChecked};
 
-declare_id!("GaVb9PQr9eTnFe6zVAKwUyfCCDbp7dR1KqdJrFnQRexQ");
+declare_id!("57MA23vJ2yS9FV2oL4bz5GcKoXWXGhc25R61PU8dgefD");
 
 /// Seeds for PDA derivation
 pub const GLOBAL_STATE_SEED: &[u8] = b"global_state";

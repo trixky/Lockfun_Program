@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # ============================================================================
-# B3drok - Anchor <-> SvelteKit Sync Script
+# Lockfun - Anchor <-> SvelteKit Sync Script
 # ============================================================================
 # Builds the Anchor program and syncs IDL/types to the frontend client
 # Usage: ./sync.sh [--build] [--sync-only]
@@ -12,11 +12,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROGRAM_DIR="$SCRIPT_DIR/program"
-CLIENT_DIR="$SCRIPT_DIR/client"
+CLIENT_DIR="$SCRIPT_DIR/../timelock/client"
 
 # Source and destination paths
-IDL_SOURCE="$PROGRAM_DIR/target/idl/b3drok.json"
-TYPES_SOURCE="$PROGRAM_DIR/target/types/b3drok.ts"
+IDL_SOURCE="$PROGRAM_DIR/target/idl/lockfun.json"
+TYPES_SOURCE="$PROGRAM_DIR/target/types/lockfun.ts"
 CLIENT_PROGRAM_DIR="$CLIENT_DIR/src/lib/program"
 
 # Colors for output
@@ -111,20 +111,24 @@ log_success "Copied types to client"
 # ============================================================================
 # Step 7: Extract constants from Rust source
 # ============================================================================
-RUST_SOURCE="$PROGRAM_DIR/programs/b3drok/src/lib.rs"
+RUST_SOURCE="$PROGRAM_DIR/programs/lockfun/src/lib.rs"
 
-# Extract MAX_CONTENT_CHARS from Rust source
-MAX_CONTENT_CHARS=$(grep -E "^pub const MAX_CONTENT_CHARS: usize = " "$RUST_SOURCE" | grep -oE '[0-9]+' | head -1)
-if [ -z "$MAX_CONTENT_CHARS" ]; then
-    log_warning "Could not extract MAX_CONTENT_CHARS, defaulting to 2240"
-    MAX_CONTENT_CHARS=2240
+# Extract FEE_AMOUNT from Rust source
+FEE_AMOUNT=$(grep "pub const FEE_AMOUNT: u64 = " "$RUST_SOURCE" | sed 's/.*= *\([0-9_]*\).*/\1/' | tr -d '_')
+if [ -z "$FEE_AMOUNT" ]; then
+    log_warning "Could not extract FEE_AMOUNT, defaulting to 30000000"
+    FEE_AMOUNT=30000000
 fi
 
-# Extract ACTION_COST_LAMPORTS from Rust source
-ACTION_COST_LAMPORTS=$(grep "pub const ACTION_COST_LAMPORTS" "$RUST_SOURCE" | sed 's/.*= *\([0-9_]*\).*/\1/' | tr -d '_')
-if [ -z "$ACTION_COST_LAMPORTS" ]; then
-    log_warning "Could not extract ACTION_COST_LAMPORTS, defaulting to 1000000"
-    ACTION_COST_LAMPORTS=1000000
+# Extract FEE_RECIPIENT from Rust source (handles both pubkey!() macro and direct string)
+FEE_RECIPIENT=$(grep "pub const FEE_RECIPIENT: Pubkey = " "$RUST_SOURCE" | grep -oE '"[A-Za-z0-9]{32,44}"' | head -1 | tr -d '"')
+if [ -z "$FEE_RECIPIENT" ]; then
+    # Try alternative pattern for pubkey!() macro format
+    FEE_RECIPIENT=$(grep "pub const FEE_RECIPIENT" "$RUST_SOURCE" | grep -oE '[A-Za-z0-9]{32,44}' | head -1)
+fi
+if [ -z "$FEE_RECIPIENT" ]; then
+    log_warning "Could not extract FEE_RECIPIENT, defaulting to CsJ1qQSA7hsxAH27cqENqhTy7vBUcdMdVQXAMubJniPo"
+    FEE_RECIPIENT="CsJ1qQSA7hsxAH27cqENqhTy7vBUcdMdVQXAMubJniPo"
 fi
 
 # ============================================================================
@@ -137,30 +141,65 @@ cat > "$CLIENT_PROGRAM_DIR/config.ts" << EOF
 // ============================================================================
 
 import { address } from '@solana/addresses';
+import { PUBLIC_SOLANA_NETWORK } from '\$env/static/public';
 
-/** Program ID for b3drok */
+/** Program ID for lockfun */
 export const PROGRAM_ID = address('$PROGRAM_ID');
 
 /** Seed constants for PDA derivation */
 export const SEEDS = {
 	GLOBAL_STATE: 'global_state',
-	MESSAGE: 'message'
+	LOCK: 'lock',
+	VAULT: 'vault'
 } as const;
 
-/** Cost for writing and liking: 0.001 SOL = ${ACTION_COST_LAMPORTS} lamports */
-export const ACTION_COST_LAMPORTS = ${ACTION_COST_LAMPORTS}n;
+/** Fee amount for locking tokens: 0.03 SOL = ${FEE_AMOUNT} lamports */
+export const FEE_AMOUNT = ${FEE_AMOUNT}n;
 
-/** Maximum content length in characters */
-export const MAX_CONTENT_CHARS = ${MAX_CONTENT_CHARS};
+/** Fee recipient address */
+export const FEE_RECIPIENT = address('$FEE_RECIPIENT');
 
-/** RPC endpoints */
-export const RPC_ENDPOINTS = {
-	mainnet: 'https://api.mainnet-beta.solana.com',
-	devnet: 'https://api.devnet.solana.com',
-	localnet: 'http://localhost:8899'
+/** Solana network types */
+export type SolanaNetwork = 'LOCAL' | 'DEVNET' | 'TESTNET' | 'MAINNET';
+
+/** Default RPC endpoints by network (fallback if no custom RPC) */
+const DEFAULT_RPC_ENDPOINTS = {
+	LOCAL: 'http://localhost:8899',
+	DEVNET: 'https://api.devnet.solana.com',
+	TESTNET: 'https://api.testnet.solana.com',
+	MAINNET: 'https://mainnet.helius-rpc.com/?api-key=92705105-0289-44ec-8492-371710c391ed'
+	// MAINNET: 'https://api.mainnet.solana.com'
 } as const;
 
-export type Cluster = keyof typeof RPC_ENDPOINTS;
+/** Get the configured network from environment */
+function getNetworkFromEnv(): SolanaNetwork {
+	const network = PUBLIC_SOLANA_NETWORK as string;
+	if (network === 'LOCAL' || network === 'DEVNET' || network === 'TESTNET' || network === 'MAINNET') {
+		return network;
+	}
+	console.warn(\`Invalid PUBLIC_SOLANA_NETWORK: "\${network}", defaulting to LOCAL\`);
+	return 'LOCAL';
+}
+
+/** Current configured Solana network */
+export const SOLANA_NETWORK: SolanaNetwork = getNetworkFromEnv();
+
+/** 
+ * RPC endpoints - uses custom RPC URL if provided, otherwise falls back to defaults
+ * Set PUBLIC_SOLANA_RPC_URL in .env for custom RPC (recommended for mainnet)
+ */
+export const RPC_ENDPOINTS: Record<SolanaNetwork, string> = {
+	LOCAL: DEFAULT_RPC_ENDPOINTS.LOCAL,
+	DEVNET: DEFAULT_RPC_ENDPOINTS.DEVNET,
+	TESTNET: DEFAULT_RPC_ENDPOINTS.TESTNET,
+	MAINNET: DEFAULT_RPC_ENDPOINTS.MAINNET
+};
+
+/** Current RPC endpoint based on configured network */
+export const RPC_ENDPOINT: string = RPC_ENDPOINTS[SOLANA_NETWORK];
+
+/** Cluster type for backwards compatibility */
+export type Cluster = SolanaNetwork;
 EOF
 
 log_success "Generated config.ts with program ID"
@@ -170,30 +209,25 @@ log_success "Generated config.ts with program ID"
 # ============================================================================
 cat > "$CLIENT_PROGRAM_DIR/index.ts" << 'EOF'
 // ============================================================================
-// B3drok Program Client
+// Lockfun Program Client
 // Auto-generated by sync.sh - Safe to extend, but core exports are regenerated
 // ============================================================================
 
 // Re-export everything
 export * from './config';
-export type { B3drok } from './types';
+export type { Lockfun } from './types';
 
 // Export IDL as a typed constant
 import idlJson from './idl.json';
-import type { B3drok } from './types';
-export const IDL = idlJson as B3drok;
+import type { Lockfun } from './types';
+export const IDL = idlJson as Lockfun;
 
 // Re-export the program client and types
-export { b3drok } from './client';
-export type { Message, GlobalState, WriteOptions } from './client';
+export { lockfun, getLockPda, getVaultPda } from './client';
+export type { Lock, GlobalState } from './client';
 
-// Re-export transaction builders (from manual transactions.ts file)
-export { 
-	createWriteTransaction, 
-	createLikeTransaction, 
-	sendSignedTransaction,
-	type WriteTransactionResult 
-} from './transactions';
+// Re-export transaction builders (from manual transactions.ts file if it exists)
+// Note: transactions.ts is NOT auto-generated - update it manually for new instructions
 EOF
 
 log_success "Generated index.ts"
@@ -203,8 +237,8 @@ log_success "Generated index.ts"
 # ============================================================================
 cat > "$CLIENT_PROGRAM_DIR/client.ts" << 'EOF'
 // ============================================================================
-// B3drok Program Client
-// Provides typed functions to interact with the b3drok Solana program
+// Lockfun Program Client
+// Provides typed functions to interact with the lockfun Solana program
 // ============================================================================
 
 import { 
@@ -219,33 +253,28 @@ import {
 } from '@solana/rpc';
 import type { Base64EncodedBytes } from '@solana/rpc-types';
 
-import { PROGRAM_ID, SEEDS, RPC_ENDPOINTS, type Cluster, ACTION_COST_LAMPORTS, MAX_CONTENT_CHARS } from './config';
+import { PROGRAM_ID, SEEDS, RPC_ENDPOINTS, SOLANA_NETWORK, type Cluster, FEE_AMOUNT, FEE_RECIPIENT } from './config';
 
 // ============================================================================
 // Types
 // ============================================================================
 
-/** Message account data */
-export interface Message {
+/** Lock account data */
+export interface Lock {
 	id: bigint;
-	parentId: bigint | null;
-	timestamp: bigint;
-	writer: Address;
-	likes: bigint;
-	comments: bigint;
-	content: string;
+	owner: Address;
+	mint: Address;
+	amount: bigint;
+	unlockTimestamp: bigint;
+	createdAt: bigint;
+	vaultBump: number;
+	isUnlocked: boolean;
 }
 
 /** Global state account data */
 export interface GlobalState {
-	counter: bigint;
 	authority: Address;
-}
-
-/** Options for write instruction */
-export interface WriteOptions {
-	content: string;
-	parentId?: bigint;
+	lockCounter: bigint;
 }
 
 // ============================================================================
@@ -263,8 +292,8 @@ export async function getGlobalStatePda(): Promise<readonly [Address, number]> {
 	});
 }
 
-/** Get a Message PDA by id */
-export async function getMessagePda(id: bigint): Promise<readonly [Address, number]> {
+/** Get a Lock PDA by id */
+export async function getLockPda(id: bigint): Promise<readonly [Address, number]> {
 	const encoder = new TextEncoder();
 	const idBytes = new Uint8Array(8);
 	const view = new DataView(idBytes.buffer);
@@ -272,7 +301,20 @@ export async function getMessagePda(id: bigint): Promise<readonly [Address, numb
 	
 	return getProgramDerivedAddress({
 		programAddress: PROGRAM_ID,
-		seeds: [encoder.encode(SEEDS.MESSAGE), idBytes]
+		seeds: [encoder.encode(SEEDS.LOCK), idBytes]
+	});
+}
+
+/** Get a Vault PDA by lock id */
+export async function getVaultPda(id: bigint): Promise<readonly [Address, number]> {
+	const encoder = new TextEncoder();
+	const idBytes = new Uint8Array(8);
+	const view = new DataView(idBytes.buffer);
+	view.setBigUint64(0, id, true); // little-endian
+	
+	return getProgramDerivedAddress({
+		programAddress: PROGRAM_ID,
+		seeds: [encoder.encode(SEEDS.VAULT), idBytes]
 	});
 }
 
@@ -280,9 +322,9 @@ export async function getMessagePda(id: bigint): Promise<readonly [Address, numb
 // Program Client
 // ============================================================================
 
-function createB3drokClient() {
+function createLockfunClient() {
 	let rpc: Rpc<SolanaRpcApi> | null = null;
-	let currentCluster: Cluster = 'devnet';
+	let currentCluster: Cluster = SOLANA_NETWORK;
 
 	/** Initialize or switch RPC connection */
 	function setCluster(cluster: Cluster) {
@@ -320,18 +362,25 @@ function createB3drokClient() {
 		if (!Array.isArray(dataArray)) return null;
 		
 		const data = base64ToBuffer(dataArray[0]);
-		if (data.length < 8 + 8 + 32) return null;
+		if (data.length < 8 + 32 + 8) return null;
 		
-		const counter = readBigUInt64LE(data, 8);
-		const authorityBytes = data.slice(16, 48);
+		// Skip 8-byte discriminator
+		let offset = 8;
+		
+		// authority: Pubkey (32 bytes)
+		const authorityBytes = data.slice(offset, offset + 32);
 		const authority = addressDecoder.decode(authorityBytes);
+		offset += 32;
 		
-		return { counter, authority };
+		// lock_counter: u64
+		const lockCounter = readBigUInt64LE(data, offset);
+		
+		return { authority, lockCounter };
 	}
 
-	/** Fetch a message by ID */
-	async function fetchMessage(id: bigint): Promise<Message | null> {
-		const [pda] = await getMessagePda(id);
+	/** Fetch a lock by ID */
+	async function fetchLock(id: bigint): Promise<Lock | null> {
+		const [pda] = await getLockPda(id);
 		const rpcClient = getRpc();
 		
 		const response = await rpcClient.getAccountInfo(pda, { encoding: 'base64' }).send();
@@ -340,50 +389,57 @@ function createB3drokClient() {
 		const dataArray = response.value.data;
 		if (!Array.isArray(dataArray)) return null;
 		
-		return decodeMessage(base64ToBuffer(dataArray[0]));
+		return decodeLock(base64ToBuffer(dataArray[0]));
 	}
 
-	/** Fetch all messages (with optional filters) */
-	async function fetchMessages(options?: {
-		writer?: Address;
-		parentId?: bigint | null;
+	/** Fetch all locks (with optional filters) */
+	async function fetchLocks(options?: {
+		owner?: Address;
+		mint?: Address;
+		isUnlocked?: boolean;
 		limit?: number;
-	}): Promise<Message[]> {
+	}): Promise<Lock[]> {
 		const rpcClient = getRpc();
 		
-		// Message discriminator in base64: [110, 151, 23, 110, 198, 6, 125, 181]
-		const discriminatorBase64 = 'bpcXbsYGfbU=' as Base64EncodedBytes;
-		
+		// Lock discriminator needs to be extracted from IDL or calculated
+		// For now, we'll fetch all program accounts and filter by structure
 		const accounts = await rpcClient.getProgramAccounts(PROGRAM_ID, {
-			encoding: 'base64',
-			filters: [
-				// Filter for Message accounts by discriminator
-				{ memcmp: { offset: 0n, bytes: discriminatorBase64, encoding: 'base64' } }
-			]
+			encoding: 'base64'
 		}).send();
 		
-		const messages = accounts
+		const locks = accounts
 			.map((item) => {
 				const dataArray = item.account.data;
 				if (!Array.isArray(dataArray)) return null;
-				return decodeMessage(base64ToBuffer(dataArray[0]));
+				const decoded = decodeLock(base64ToBuffer(dataArray[0]));
+				return decoded;
 			})
-			.filter((m): m is Message => m !== null)
-			.sort((a: Message, b: Message) => Number(b.id - a.id)); // Newest first
+			.filter((l): l is Lock => l !== null)
+			.sort((a: Lock, b: Lock) => Number(b.id - a.id)); // Newest first
 		
-		return options?.limit ? messages.slice(0, options.limit) : messages;
+		// Apply filters
+		let filtered = locks;
+		if (options?.owner) {
+			filtered = filtered.filter(l => l.owner === options.owner);
+		}
+		if (options?.mint) {
+			filtered = filtered.filter(l => l.mint === options.mint);
+		}
+		if (options?.isUnlocked !== undefined) {
+			filtered = filtered.filter(l => l.isUnlocked === options.isUnlocked);
+		}
+		
+		return options?.limit ? filtered.slice(0, options.limit) : filtered;
 	}
 
-	/** Fetch messages by writer */
-	async function fetchMessagesByWriter(writer: Address): Promise<Message[]> {
-		const allMessages = await fetchMessages();
-		return allMessages.filter(m => m.writer === writer);
+	/** Fetch locks by owner */
+	async function fetchLocksByOwner(owner: Address): Promise<Lock[]> {
+		return fetchLocks({ owner });
 	}
 
-	/** Fetch replies to a message */
-	async function fetchReplies(parentId: bigint): Promise<Message[]> {
-		const allMessages = await fetchMessages();
-		return allMessages.filter(m => m.parentId === parentId);
+	/** Fetch locks by mint */
+	async function fetchLocksByMint(mint: Address): Promise<Lock[]> {
+		return fetchLocks({ mint });
 	}
 
 	// ========================================================================
@@ -414,8 +470,9 @@ function createB3drokClient() {
 		return view.getUint32(offset, true);
 	}
 
-	function decodeMessage(data: Uint8Array): Message | null {
-		if (data.length < 81) return null; // 8 discriminator + 8 id + 9 parent_id + 8 timestamp + 32 writer + 8 likes + 8 comments = 81 min
+	function decodeLock(data: Uint8Array): Lock | null {
+		// Lock structure: 8 discriminator + 8 id + 32 owner + 32 mint + 8 amount + 8 unlock_timestamp + 8 created_at + 1 vault_bump + 1 is_unlocked = 106 bytes
+		if (data.length < 106) return null;
 		
 		try {
 			// Skip 8-byte discriminator
@@ -425,36 +482,36 @@ function createB3drokClient() {
 			const id = readBigUInt64LE(data, offset);
 			offset += 8;
 			
-			// parent_id: Option<u64>
-			const hasParent = data[offset] === 1;
-			offset += 1;
-			const parentId = hasParent ? readBigUInt64LE(data, offset) : null;
-			offset += 8;
-			
-			// timestamp: i64
-			const timestamp = readBigInt64LE(data, offset);
-			offset += 8;
-			
-			// writer: Pubkey (32 bytes)
-			const writerBytes = data.slice(offset, offset + 32);
-			const writer = addressDecoder.decode(writerBytes);
+			// owner: Pubkey (32 bytes)
+			const ownerBytes = data.slice(offset, offset + 32);
+			const owner = addressDecoder.decode(ownerBytes);
 			offset += 32;
 			
-			// likes: u64
-			const likes = readBigUInt64LE(data, offset);
+			// mint: Pubkey (32 bytes)
+			const mintBytes = data.slice(offset, offset + 32);
+			const mint = addressDecoder.decode(mintBytes);
+			offset += 32;
+			
+			// amount: u64
+			const amount = readBigUInt64LE(data, offset);
 			offset += 8;
 			
-			// comments: u64
-			const comments = readBigUInt64LE(data, offset);
+			// unlock_timestamp: i64
+			const unlockTimestamp = readBigInt64LE(data, offset);
 			offset += 8;
 			
-			// content: String (4-byte len + data)
-			const contentLen = readUInt32LE(data, offset);
-			offset += 4;
-			const contentBytes = data.slice(offset, offset + contentLen);
-			const content = new TextDecoder().decode(contentBytes);
+			// created_at: i64
+			const createdAt = readBigInt64LE(data, offset);
+			offset += 8;
 			
-			return { id, parentId, timestamp, writer, likes, comments, content };
+			// vault_bump: u8
+			const vaultBump = data[offset];
+			offset += 1;
+			
+			// is_unlocked: bool (u8, 0 or 1)
+			const isUnlocked = data[offset] === 1;
+			
+			return { id, owner, mint, amount, unlockTimestamp, createdAt, vaultBump, isUnlocked };
 		} catch {
 			return null;
 		}
@@ -472,24 +529,25 @@ function createB3drokClient() {
 		
 		// Constants
 		PROGRAM_ID,
-		ACTION_COST_LAMPORTS,
-		MAX_CONTENT_CHARS,
+		FEE_AMOUNT,
+		FEE_RECIPIENT,
 		
 		// PDA derivation
 		getGlobalStatePda,
-		getMessagePda,
+		getLockPda,
+		getVaultPda,
 		
 		// Read functions
 		fetchGlobalState,
-		fetchMessage,
-		fetchMessages,
-		fetchMessagesByWriter,
-		fetchReplies,
+		fetchLock,
+		fetchLocks,
+		fetchLocksByOwner,
+		fetchLocksByMint,
 	};
 }
 
 /** Singleton program client */
-export const b3drok = createB3drokClient();
+export const lockfun = createLockfunClient();
 EOF
 
 log_success "Generated client.ts with API functions"
@@ -512,6 +570,8 @@ echo "    - client.ts    (API client)"
 echo "    - index.ts     (Re-exports)"
 echo ""
 echo "  Usage in SvelteKit:"
-echo "    import { b3drok, PROGRAM_ID, type Message } from '\$lib/program';"
+echo "    import { lockfun, PROGRAM_ID, type Lock } from '\$lib/program';"
+echo ""
+echo "  Note: transactions.ts is NOT auto-generated - update it manually for new instructions"
 echo ""
 
