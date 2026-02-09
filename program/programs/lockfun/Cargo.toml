@@ -1,7 +1,7 @@
 [package]
-name = "timelock_supply"
+name = "lockfun"
 version = "0.1.0"
-description = "Timelock Supply Program on Solana"
+description = "Lockfun Program on Solana"
 edition = "2021"
 
 [lints.rust]
@@ -9,7 +9,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("custom-he
 
 [lib]
 crate-type = ["cdylib", "lib"]
-name = "timelock_supply"
+name = "lockfun"
 
 [features]
 no-entrypoint = []
@@ -22,3 +22,4 @@ idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
 [dependencies]
 anchor-lang = "0.32.1"
 anchor-spl = "0.32.1"
+solana-program = "2.0.0"

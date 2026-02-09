@@ -5,13 +5,13 @@ resolution = true
 skip-lint = false
 
 [programs.mainnet]
-timelock_supply = "GaVb9PQr9eTnFe6zVAKwUyfCCDbp7dR1KqdJrFnQRexQ"
+lockfun = "GaVb9PQr9eTnFe6zVAKwUyfCCDbp7dR1KqdJrFnQRexQ"
 
 [programs.devnet]
-timelock_supply = "GaVb9PQr9eTnFe6zVAKwUyfCCDbp7dR1KqdJrFnQRexQ"
+lockfun = "GaVb9PQr9eTnFe6zVAKwUyfCCDbp7dR1KqdJrFnQRexQ"
 
 [programs.localnet]
-timelock_supply = "GaVb9PQr9eTnFe6zVAKwUyfCCDbp7dR1KqdJrFnQRexQ"
+lockfun = "GaVb9PQr9eTnFe6zVAKwUyfCCDbp7dR1KqdJrFnQRexQ"
 
 [registry]
 url = "https://api.apr.dev"

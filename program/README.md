@@ -21,7 +21,7 @@ The lock account is intentionally minimal. It has only **four core fields** (plu
 | **amount**  | `u64`    | Quantity of tokens locked      |
 | **unlock_timestamp** | `i64` | Unix timestamp when tokens can be unlocked |
 
-This is verified in the program: see `Lock` in `programs/timelock_supply/src/lib.rs` (fields `mint`, `owner`, `amount`, `unlock_timestamp`).
+This is verified in the program: see `Lock` in `programs/lockfun/src/lib.rs` (fields `mint`, `owner`, `amount`, `unlock_timestamp`).
 
 ## Prerequisites
 

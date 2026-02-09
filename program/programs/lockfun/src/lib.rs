@@ -8,8 +8,14 @@ pub const GLOBAL_STATE_SEED: &[u8] = b"global_state";
 pub const LOCK_SEED: &[u8] = b"lock";
 pub const VAULT_SEED: &[u8] = b"vault";
 
+/// Fee amount in lamports (0.03 SOL = 30,000,000 lamports)
+pub const FEE_AMOUNT: u64 = 30_000_000;
+
+/// Fee recipient address
+pub const FEE_RECIPIENT: Pubkey = ::solana_program::pubkey!("CsJ1qQSA7hsxAH27cqENqhTy7vBUcdMdVQXAMubJniPo");
+
 #[program]
-pub mod timelock_supply {
+pub mod lockfun {
     use super::*;
 
     /// Initialize the program with global state
@@ -17,7 +23,7 @@ pub mod timelock_supply {
         let global_state = &mut ctx.accounts.global_state;
         global_state.authority = ctx.accounts.authority.key();
         global_state.lock_counter = 0;
-        msg!("Timelock initialized!");
+        msg!("Lockfun initialized!");
         Ok(())
     }
 
@@ -62,6 +68,18 @@ pub mod timelock_supply {
             ),
             amount,
             decimals,
+        )?;
+
+        // Transfer fee (0.03 SOL) to fee recipient
+        anchor_lang::system_program::transfer(
+            CpiContext::new(
+                ctx.accounts.system_program.to_account_info(),
+                anchor_lang::system_program::Transfer {
+                    from: ctx.accounts.owner.to_account_info(),
+                    to: ctx.accounts.fee_recipient.to_account_info(),
+                },
+            ),
+            FEE_AMOUNT,
         )?;
 
         // Increment the global counter for the next lock
@@ -314,6 +332,14 @@ pub struct LockTokens<'info> {
     #[account(mut)]
     pub owner: Signer<'info>,
 
+    /// Fee recipient account (receives 0.03 SOL per lock creation)
+    /// CHECK: Address is validated to match the hardcoded fee recipient
+    #[account(
+        mut,
+        address = FEE_RECIPIENT @ ErrorCode::InvalidFeeRecipient
+    )]
+    pub fee_recipient: AccountInfo<'info>,
+
     pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
 }
@@ -427,4 +453,6 @@ pub enum ErrorCode {
     CannotShortenTimestamp,
     #[msg("Duplicate accounts detected - vault and owner token account must be different")]
     DuplicateAccounts,
+    #[msg("Invalid fee recipient address")]
+    InvalidFeeRecipient,
 }

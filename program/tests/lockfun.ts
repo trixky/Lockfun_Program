@@ -1,6 +1,6 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
-import { TimelockSupply } from "../target/types/timelock_supply";
+import { Lockfun } from "../target/types/lockfun";
 import { expect } from "chai";
 import {
   PublicKey,
@@ -36,7 +36,7 @@ interface LockAccount {
 // Helper class for RPC fetching (simulates frontend usage)
 // =============================================================================
 class LockFetcher {
-  private program: Program<TimelockSupply>;
+  private program: Program<Lockfun>;
 
   // Offsets for memcmp filters (based on Lock struct layout)
   static readonly OFFSETS = {
@@ -51,7 +51,7 @@ class LockFetcher {
     IS_UNLOCKED: 105,    // 8 + 8 + 32 + 32 + 8 + 8 + 8 + 1
   };
 
-  constructor(program: Program<TimelockSupply>) {
+  constructor(program: Program<Lockfun>) {
     this.program = program;
   }
 
@@ -295,11 +295,11 @@ class LockFetcher {
   }
 }
 
-describe("timelock_supply", () => {
+describe("lockfun", () => {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
 
-  const program = anchor.workspace.TimelockSupply as Program<TimelockSupply>;
+  const program = anchor.workspace.Lockfun as Program<Lockfun>;
 
   // PDAs
   let globalStatePda: PublicKey;
@@ -328,6 +328,9 @@ describe("timelock_supply", () => {
 
   // Lock fetcher instance
   let lockFetcher: LockFetcher;
+
+  // Fee recipient address (receives 0.03 SOL per lock creation)
+  const FEE_RECIPIENT = new PublicKey("CsJ1qQSA7hsxAH27cqENqhTy7vBUcdMdVQXAMubJniPo");
 
   // Helper to derive lock PDA
   const getLockPda = (lockId: number | anchor.BN): PublicKey => {
@@ -371,6 +374,7 @@ describe("timelock_supply", () => {
         mint: mint,
         ownerTokenAccount: userTokenAccount,
         owner: user.publicKey,
+        feeRecipient: FEE_RECIPIENT,
         tokenProgram: TOKEN_PROGRAM_ID,
         systemProgram: anchor.web3.SystemProgram.programId,
       })
@@ -584,6 +588,7 @@ describe("timelock_supply", () => {
           ownerTokenAccount: user1TokenAccount1,
           owner: user1.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
+          feeRecipient: FEE_RECIPIENT,
           systemProgram: anchor.web3.SystemProgram.programId,
         })
         .signers([user1])
@@ -621,6 +626,7 @@ describe("timelock_supply", () => {
             ownerTokenAccount: user1TokenAccount1,
             owner: user1.publicKey,
             tokenProgram: TOKEN_PROGRAM_ID,
+            feeRecipient: FEE_RECIPIENT,
             systemProgram: anchor.web3.SystemProgram.programId,
           })
           .signers([user1])
@@ -651,6 +657,7 @@ describe("timelock_supply", () => {
             ownerTokenAccount: user1TokenAccount1,
             owner: user1.publicKey,
             tokenProgram: TOKEN_PROGRAM_ID,
+            feeRecipient: FEE_RECIPIENT,
             systemProgram: anchor.web3.SystemProgram.programId,
           })
           .signers([user1])
@@ -659,6 +666,49 @@ describe("timelock_supply", () => {
       } catch (err: any) {
         expect(err.error?.errorCode?.code).to.equal("TimestampInPast");
       }
+    });
+
+    it("sends 0.03 SOL fee to fee recipient when creating a lock", async () => {
+      const globalState = await program.account.globalState.fetch(globalStatePda);
+      const lockId = globalState.lockCounter.toNumber();
+      const lockPda = getLockPda(lockId);
+      const vaultPda = getVaultPda(lockId);
+
+      const amount = new anchor.BN(100_000_000_000); // 100 tokens
+      const unlockTimestamp = new anchor.BN(Math.floor(Date.now() / 1000) + 3600);
+
+      // Get balances before
+      const feeRecipientBalanceBefore = await provider.connection.getBalance(FEE_RECIPIENT);
+      const ownerBalanceBefore = await provider.connection.getBalance(user1.publicKey);
+
+      await program.methods
+        .lock(amount, unlockTimestamp)
+        .accounts({
+          globalState: globalStatePda,
+          lock: lockPda,
+          vault: vaultPda,
+          mint: mint1,
+          ownerTokenAccount: user1TokenAccount1,
+          owner: user1.publicKey,
+          feeRecipient: FEE_RECIPIENT,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .signers([user1])
+        .rpc();
+
+      // Get balances after
+      const feeRecipientBalanceAfter = await provider.connection.getBalance(FEE_RECIPIENT);
+      const ownerBalanceAfter = await provider.connection.getBalance(user1.publicKey);
+
+      // Verify fee recipient received 0.03 SOL (30,000,000 lamports)
+      const feeReceived = feeRecipientBalanceAfter - feeRecipientBalanceBefore;
+      expect(feeReceived).to.equal(30_000_000);
+
+      // Verify owner balance decreased by at least the fee amount
+      // (may be more due to transaction fees)
+      const balanceDecrease = ownerBalanceBefore - ownerBalanceAfter;
+      expect(balanceDecrease).to.be.at.least(30_000_000);
     });
   });
 
@@ -699,6 +749,7 @@ describe("timelock_supply", () => {
             ownerTokenAccount: user1TokenAccount1,
             owner: user1.publicKey,
             tokenProgram: TOKEN_PROGRAM_ID,
+            feeRecipient: FEE_RECIPIENT,
             systemProgram: anchor.web3.SystemProgram.programId,
           })
           .signers([user1])
@@ -750,6 +801,7 @@ describe("timelock_supply", () => {
           ownerTokenAccount: user1TokenAccount1,
           owner: user1.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
+          feeRecipient: FEE_RECIPIENT,
           systemProgram: anchor.web3.SystemProgram.programId,
         })
         .signers([user1])
@@ -771,6 +823,7 @@ describe("timelock_supply", () => {
           ownerTokenAccount: user1TokenAccount1,
           owner: user1.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
+          feeRecipient: FEE_RECIPIENT,
           systemProgram: anchor.web3.SystemProgram.programId,
         })
         .signers([user1])
@@ -816,6 +869,7 @@ describe("timelock_supply", () => {
           ownerTokenAccount: user1TokenAccount1,
           owner: user1.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
+          feeRecipient: FEE_RECIPIENT,
           systemProgram: anchor.web3.SystemProgram.programId,
         })
         .signers([user1])
@@ -837,6 +891,7 @@ describe("timelock_supply", () => {
           ownerTokenAccount: user1TokenAccount1,
           owner: user1.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
+          feeRecipient: FEE_RECIPIENT,
           systemProgram: anchor.web3.SystemProgram.programId,
         })
         .signers([user1])
@@ -878,6 +933,7 @@ describe("timelock_supply", () => {
           ownerTokenAccount: user1TokenAccount1,
           owner: user1.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
+          feeRecipient: FEE_RECIPIENT,
           systemProgram: anchor.web3.SystemProgram.programId,
         })
         .signers([user1])
@@ -898,6 +954,7 @@ describe("timelock_supply", () => {
           ownerTokenAccount: user1TokenAccount1,
           owner: user1.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
+          feeRecipient: FEE_RECIPIENT,
           systemProgram: anchor.web3.SystemProgram.programId,
         })
         .signers([user1])
@@ -949,6 +1006,7 @@ describe("timelock_supply", () => {
           ownerTokenAccount: user1TokenAccount1,
           owner: user1.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
+          feeRecipient: FEE_RECIPIENT,
           systemProgram: anchor.web3.SystemProgram.programId,
         })
         .signers([user1])
@@ -971,6 +1029,7 @@ describe("timelock_supply", () => {
           ownerTokenAccount: user1TokenAccount1,
           owner: user1.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
+          feeRecipient: FEE_RECIPIENT,
           systemProgram: anchor.web3.SystemProgram.programId,
         })
         .signers([user1])
@@ -1031,6 +1090,7 @@ describe("timelock_supply", () => {
             ownerTokenAccount: user1TokenAccount1,
             owner: user1.publicKey,
             tokenProgram: TOKEN_PROGRAM_ID,
+            feeRecipient: FEE_RECIPIENT,
             systemProgram: anchor.web3.SystemProgram.programId,
           })
           .signers([user1])
@@ -1083,6 +1143,7 @@ describe("timelock_supply", () => {
             ownerTokenAccount: user1TokenAccount1,
             owner: user1.publicKey,
             tokenProgram: TOKEN_PROGRAM_ID,
+            feeRecipient: FEE_RECIPIENT,
             systemProgram: anchor.web3.SystemProgram.programId,
           })
           .signers([user1])
@@ -1138,6 +1199,7 @@ describe("timelock_supply", () => {
           ownerTokenAccount: user1TokenAccount1,
           owner: user1.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
+          feeRecipient: FEE_RECIPIENT,
           systemProgram: anchor.web3.SystemProgram.programId,
         })
         .signers([user1])
@@ -1162,6 +1224,59 @@ describe("timelock_supply", () => {
 
       const lock = await program.account.lock.fetch(unlockableLockPda);
       expect(lock.isUnlocked).to.equal(true);
+    });
+
+    it("does NOT send fees when unlocking tokens", async () => {
+      // Create a new lock for this test
+      const globalState = await program.account.globalState.fetch(globalStatePda);
+      const testLockId = globalState.lockCounter.toNumber();
+      const testLockPda = getLockPda(testLockId);
+      const testVaultPda = getVaultPda(testLockId);
+
+      const unlockTimestamp = new anchor.BN(Math.floor(Date.now() / 1000) + 2);
+      const testAmount = new anchor.BN(10_000_000_000);
+
+      // Create lock (this will send fees)
+      await program.methods
+        .lock(testAmount, unlockTimestamp)
+        .accounts({
+          globalState: globalStatePda,
+          lock: testLockPda,
+          vault: testVaultPda,
+          mint: mint1,
+          ownerTokenAccount: user1TokenAccount1,
+          owner: user1.publicKey,
+          feeRecipient: FEE_RECIPIENT,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .signers([user1])
+        .rpc();
+
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+
+      // Get balances before unlock
+      const feeRecipientBalanceBefore = await provider.connection.getBalance(FEE_RECIPIENT);
+
+      // Unlock tokens
+      await program.methods
+        .unlock()
+        .accounts({
+          lock: testLockPda,
+          vault: testVaultPda,
+          mint: mint1,
+          ownerTokenAccount: user1TokenAccount1,
+          owner: user1.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([user1])
+        .rpc();
+
+      // Get balances after unlock
+      const feeRecipientBalanceAfter = await provider.connection.getBalance(FEE_RECIPIENT);
+
+      // Verify fee recipient balance did NOT increase (no fees sent)
+      expect(feeRecipientBalanceAfter).to.equal(feeRecipientBalanceBefore);
     });
 
     it("cannot unlock twice", async () => {
@@ -1259,6 +1374,7 @@ describe("timelock_supply", () => {
           ownerTokenAccount: user1TokenAccount1,
           owner: user1.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
+          feeRecipient: FEE_RECIPIENT,
           systemProgram: anchor.web3.SystemProgram.programId,
         })
         .signers([user1])
@@ -1288,6 +1404,31 @@ describe("timelock_supply", () => {
       expect(amountAfter).to.equal(amountBefore + additionalAmount.toNumber());
       expect(lockAfter.isUnlocked).to.equal(false);
       expect(lockAfter.owner.toString()).to.equal(user1.publicKey.toString());
+    });
+
+    it("does NOT send fees when topping up a lock", async () => {
+      // Get balances before top_up
+      const feeRecipientBalanceBefore = await provider.connection.getBalance(FEE_RECIPIENT);
+
+      // Top up the lock
+      await program.methods
+        .topUp(additionalAmount)
+        .accounts({
+          lock: topUpLockPda,
+          vault: topUpVaultPda,
+          mint: mint1,
+          ownerTokenAccount: user1TokenAccount1,
+          owner: user1.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([user1])
+        .rpc();
+
+      // Get balances after top_up
+      const feeRecipientBalanceAfter = await provider.connection.getBalance(FEE_RECIPIENT);
+
+      // Verify fee recipient balance did NOT increase (no fees sent)
+      expect(feeRecipientBalanceAfter).to.equal(feeRecipientBalanceBefore);
     });
 
     it("rejects zero amount", async () => {
@@ -1330,6 +1471,7 @@ describe("timelock_supply", () => {
           ownerTokenAccount: user1TokenAccount1,
           owner: user1.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
+          feeRecipient: FEE_RECIPIENT,
           systemProgram: anchor.web3.SystemProgram.programId,
         })
         .signers([user1])
@@ -1410,6 +1552,7 @@ describe("timelock_supply", () => {
           ownerTokenAccount: user1TokenAccount2,
           owner: user1.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
+          feeRecipient: FEE_RECIPIENT,
           systemProgram: anchor.web3.SystemProgram.programId,
         })
         .signers([user1])
@@ -1503,6 +1646,7 @@ describe("timelock_supply", () => {
           ownerTokenAccount: user1TokenAccount1,
           owner: user1.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
+          feeRecipient: FEE_RECIPIENT,
           systemProgram: anchor.web3.SystemProgram.programId,
         })
         .signers([user1])
@@ -1528,6 +1672,32 @@ describe("timelock_supply", () => {
       expect(lockAfter.unlockTimestamp.toNumber()).to.equal(newTimestamp.toNumber());
       expect(lockAfter.isUnlocked).to.equal(false);
       expect(lockAfter.amount.toNumber()).to.equal(initialAmount.toNumber()); // Amount unchanged
+    });
+
+    it("does NOT send fees when extending a lock", async () => {
+      const lockBefore = await program.account.lock.fetch(extendLockPda);
+      const timestampBefore = lockBefore.unlockTimestamp.toNumber();
+
+      // Get balances before extend
+      const feeRecipientBalanceBefore = await provider.connection.getBalance(FEE_RECIPIENT);
+
+      const newTimestamp = new anchor.BN(timestampBefore + 7200); // Add 2 hours
+
+      // Extend the lock
+      await program.methods
+        .extend(newTimestamp)
+        .accounts({
+          lock: extendLockPda,
+          owner: user1.publicKey,
+        })
+        .signers([user1])
+        .rpc();
+
+      // Get balances after extend
+      const feeRecipientBalanceAfter = await provider.connection.getBalance(FEE_RECIPIENT);
+
+      // Verify fee recipient balance did NOT increase (no fees sent)
+      expect(feeRecipientBalanceAfter).to.equal(feeRecipientBalanceBefore);
     });
 
     it("cannot shorten unlock timestamp", async () => {
@@ -1698,6 +1868,7 @@ describe("timelock_supply", () => {
           ownerTokenAccount: user1TokenAccount1,
           owner: user1.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
+          feeRecipient: FEE_RECIPIENT,
           systemProgram: anchor.web3.SystemProgram.programId,
         })
         .signers([user1])
@@ -1811,6 +1982,7 @@ describe("timelock_supply", () => {
           ownerTokenAccount: user1TokenAccount1,
           owner: user1.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
+          feeRecipient: FEE_RECIPIENT,
           systemProgram: anchor.web3.SystemProgram.programId,
         })
         .signers([user1])
@@ -1869,6 +2041,7 @@ describe("timelock_supply", () => {
           ownerTokenAccount: user1TokenAccount1,
           owner: user1.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
+          feeRecipient: FEE_RECIPIENT,
           systemProgram: anchor.web3.SystemProgram.programId,
         })
         .signers([user1])
@@ -1927,6 +2100,7 @@ describe("timelock_supply", () => {
           ownerTokenAccount: user1TokenAccount1,
           owner: user1.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
+          feeRecipient: FEE_RECIPIENT,
           systemProgram: anchor.web3.SystemProgram.programId,
         })
         .signers([user1])
@@ -2016,6 +2190,7 @@ describe("timelock_supply", () => {
           ownerTokenAccount: user1TokenAccount1,
           owner: user1.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
+          feeRecipient: FEE_RECIPIENT,
           systemProgram: anchor.web3.SystemProgram.programId,
         })
         .signers([user1])
@@ -2083,11 +2258,12 @@ describe("timelock_supply", () => {
             mint: mint1,
             ownerTokenAccount: account,
             owner: user.publicKey,
-            tokenProgram: TOKEN_PROGRAM_ID,
-            systemProgram: anchor.web3.SystemProgram.programId,
-          })
-          .signers([user])
-          .rpc();
+          tokenProgram: TOKEN_PROGRAM_ID,
+          feeRecipient: FEE_RECIPIENT,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .signers([user])
+        .rpc();
 
         createdLockIds.push(lockId);
         await new Promise(r => setTimeout(r, 50));
@@ -2141,6 +2317,7 @@ describe("timelock_supply", () => {
           ownerTokenAccount: user1TokenAccount1,
           owner: user1.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
+          feeRecipient: FEE_RECIPIENT,
           systemProgram: anchor.web3.SystemProgram.programId,
         })
         .signers([user1])
@@ -2171,6 +2348,7 @@ describe("timelock_supply", () => {
           ownerTokenAccount: user1TokenAccount1,
           owner: user1.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
+          feeRecipient: FEE_RECIPIENT,
           systemProgram: anchor.web3.SystemProgram.programId,
         })
         .signers([user1])
@@ -2201,6 +2379,7 @@ describe("timelock_supply", () => {
           ownerTokenAccount: user1TokenAccount1,
           owner: user1.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
+          feeRecipient: FEE_RECIPIENT,
           systemProgram: anchor.web3.SystemProgram.programId,
         })
         .signers([user1])
@@ -2290,6 +2469,7 @@ describe("timelock_supply", () => {
             ownerTokenAccount: user1TokenAccount1,
             owner: user1.publicKey,
             tokenProgram: TOKEN_PROGRAM_ID,
+            feeRecipient: FEE_RECIPIENT,
             systemProgram: anchor.web3.SystemProgram.programId,
           })
           .signers([user1])
