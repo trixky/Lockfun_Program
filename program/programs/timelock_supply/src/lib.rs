@@ -32,11 +32,12 @@ pub mod timelock_supply {
         require!(unlock_timestamp > current_ts, ErrorCode::TimestampInPast);
 
         let global_state = &mut ctx.accounts.global_state;
+        // Assign sequential ID to this lock (represents which lock this is: 1st, 2nd, 3rd, etc.)
         let lock_id = global_state.lock_counter;
 
         // Populate lock account
         let lock = &mut ctx.accounts.lock;
-        lock.id = lock_id;
+        lock.id = lock_id; // Store the sequential number in the lock account
         lock.owner = ctx.accounts.owner.key();
         lock.mint = ctx.accounts.mint.key();
         lock.amount = amount;
@@ -63,7 +64,8 @@ pub mod timelock_supply {
             decimals,
         )?;
 
-        // Increment counter
+        // Increment the global counter for the next lock
+        // This allows easy fetching of total lock count and recent locks
         global_state.lock_counter = global_state.lock_counter.checked_add(1).unwrap();
 
         msg!(
@@ -210,6 +212,10 @@ pub struct GlobalState {
     /// Authority (admin)
     pub authority: Pubkey,
     /// Counter for unique lock IDs
+    /// This represents the total number of locks created.
+    /// When a new lock is created, this counter is incremented and
+    /// the new lock's ID is set to the current counter value.
+    /// To fetch the latest locks, query locks with IDs from (lock_counter - N) to (lock_counter - 1).
     pub lock_counter: u64,
 }
 
@@ -217,6 +223,8 @@ pub struct GlobalState {
 #[derive(InitSpace)]
 pub struct Lock {
     /// Unique lock ID (for PDA derivation)
+    /// This is a sequential number representing which lock this is (1st, 2nd, 3rd, etc.)
+    /// The ID is assigned from GlobalState.lock_counter when the lock is created.
     /// Offset: 8 (discriminator)
     pub id: u64,
     /// Owner who locked the tokens

@@ -1,0 +1,12 @@
+{
+  "name": "lockfun-scripts",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Scripts utilitaires pour le projet LockFun",
+  "scripts": {
+    "json-to-base58": "node json-to-base58.js"
+  },
+  "dependencies": {
+    "bs58": "^6.0.0"
+  }
+}

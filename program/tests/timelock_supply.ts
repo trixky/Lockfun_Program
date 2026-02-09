@@ -260,6 +260,39 @@ class LockFetcher {
 
     return this.paginate(locks, page, pageSize);
   }
+
+  // ==========================================================================
+  // Global state utilities
+  // ==========================================================================
+
+  // Fetch the global state to get total lock count
+  async getTotalLockCount(): Promise<number> {
+    const [globalStatePda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("global_state")],
+      this.program.programId
+    );
+    const globalState = await this.program.account.globalState.fetch(globalStatePda);
+    return globalState.lockCounter.toNumber();
+  }
+
+  // Fetch the X most recent locks (by ID, which is sequential)
+  // This is efficient because IDs are sequential: latest locks have highest IDs
+  async fetchLatestLocks(count: number): Promise<LockAccount[]> {
+    const allLocks = await this.fetchAll();
+    // Sort by ID descending (highest ID = most recent)
+    const sorted = this.sortByIdAsc(allLocks).reverse();
+    // Return the last N locks
+    return sorted.slice(0, count);
+  }
+
+  // Fetch locks by ID range (useful for pagination of recent locks)
+  async fetchLocksByIdRange(startId: number, endId: number): Promise<LockAccount[]> {
+    const allLocks = await this.fetchAll();
+    return allLocks.filter(lock => {
+      const id = lock.account.id.toNumber();
+      return id >= startId && id < endId;
+    }).sort((a, b) => a.account.id.toNumber() - b.account.id.toNumber());
+  }
 }
 
 describe("timelock_supply", () => {
@@ -3030,6 +3063,228 @@ describe("timelock_supply", () => {
       console.log(`   - Fetch ${user1Locks.length} locks: ${fetchTime}ms`);
       console.log(`   - Filter + Sort + Paginate: ${processTime}ms`);
       console.log(`   - Result: ${paginated.data.length} items on page 1`);
+    });
+  });
+
+  // ===========================================================================
+  // GLOBAL STATE & LOCK COUNTER TESTS
+  // ===========================================================================
+  describe("Global State & Lock Counter", () => {
+    it("should have lock_counter that matches actual lock count", async () => {
+      const globalState = await program.account.globalState.fetch(globalStatePda);
+      const counterValue = globalState.lockCounter.toNumber();
+      
+      // Verify counter exists and is a valid number
+      expect(counterValue).to.be.a('number');
+      expect(counterValue).to.be.greaterThanOrEqual(0);
+      
+      // Verify counter matches the actual number of locks
+      const allLocks = await lockFetcher.fetchAll();
+      expect(counterValue).to.equal(allLocks.length);
+    });
+
+    it("should increment lock_counter when creating locks", async () => {
+      // Capture initial state
+      const globalStateInitial = await program.account.globalState.fetch(globalStatePda);
+      const initialCounter = globalStateInitial.lockCounter.toNumber();
+      
+      // Create 5 locks
+      const unlockTimestamp = new anchor.BN(Math.floor(Date.now() / 1000) + 3600);
+      const amount = new anchor.BN(100_000_000); // 0.1 tokens
+
+      const lockIds: number[] = [];
+
+      for (let i = 0; i < 5; i++) {
+        // Check counter before creating lock
+        const globalStateBefore = await program.account.globalState.fetch(globalStatePda);
+        const expectedId = globalStateBefore.lockCounter.toNumber();
+        
+        // Create lock
+        const lockId = await createLock(
+          user1,
+          user1TokenAccount1,
+          mint1,
+          amount,
+          unlockTimestamp
+        );
+
+        lockIds.push(lockId);
+
+        // Verify the lock got the correct sequential ID
+        expect(lockId).to.equal(expectedId);
+
+        // Verify counter incremented
+        const globalStateAfter = await program.account.globalState.fetch(globalStatePda);
+        expect(globalStateAfter.lockCounter.toNumber()).to.equal(expectedId + 1);
+
+        // Verify the lock account has the correct ID
+        const lockPda = getLockPda(lockId);
+        const lock = await program.account.lock.fetch(lockPda);
+        expect(lock.id.toNumber()).to.equal(lockId);
+      }
+
+      // Verify all IDs are sequential relative to initial counter
+      for (let i = 0; i < lockIds.length; i++) {
+        expect(lockIds[i]).to.equal(initialCounter + i);
+      }
+
+      // Final counter should be initial + 5
+      const finalGlobalState = await program.account.globalState.fetch(globalStatePda);
+      expect(finalGlobalState.lockCounter.toNumber()).to.equal(initialCounter + 5);
+    });
+
+    it("should easily fetch total lock count from GlobalState", async () => {
+      const totalCount = await lockFetcher.getTotalLockCount();
+      expect(totalCount).to.be.a('number');
+      expect(totalCount).to.be.greaterThanOrEqual(0);
+      
+      // Verify it matches the actual number of locks
+      const allLocks = await lockFetcher.fetchAll();
+      expect(totalCount).to.equal(allLocks.length);
+    });
+
+    it("should fetch the X most recent locks correctly", async () => {
+      // Create 10 more locks to have enough data
+      const unlockTimestamp = new anchor.BN(Math.floor(Date.now() / 1000) + 3600);
+      const amount = new anchor.BN(50_000_000);
+
+      const totalBefore = await lockFetcher.getTotalLockCount();
+
+      for (let i = 0; i < 10; i++) {
+        await createLock(
+          user1,
+          user1TokenAccount1,
+          mint1,
+          amount,
+          unlockTimestamp
+        );
+      }
+
+      const totalAfter = await lockFetcher.getTotalLockCount();
+      expect(totalAfter).to.equal(totalBefore + 10);
+
+      // Fetch the 5 most recent locks
+      const latest5 = await lockFetcher.fetchLatestLocks(5);
+      expect(latest5.length).to.equal(5);
+
+      // Verify they are sorted by ID descending (highest ID = most recent)
+      for (let i = 0; i < latest5.length - 1; i++) {
+        expect(latest5[i].account.id.toNumber()).to.be.greaterThan(
+          latest5[i + 1].account.id.toNumber()
+        );
+      }
+
+      // Verify the most recent lock has the highest ID (totalAfter - 1)
+      expect(latest5[0].account.id.toNumber()).to.equal(totalAfter - 1);
+      expect(latest5[latest5.length - 1].account.id.toNumber()).to.equal(totalAfter - 5);
+    });
+
+    it("should fetch locks by ID range correctly", async () => {
+      const totalCount = await lockFetcher.getTotalLockCount();
+      
+      if (totalCount >= 10) {
+        // Fetch locks with IDs from (totalCount - 10) to (totalCount - 1)
+        const startId = totalCount - 10;
+        const endId = totalCount;
+        
+        const locksInRange = await lockFetcher.fetchLocksByIdRange(startId, endId);
+        
+        // Should have 10 locks (or less if some were unlocked/deleted)
+        expect(locksInRange.length).to.be.greaterThan(0);
+        expect(locksInRange.length).to.be.lessThanOrEqual(10);
+        
+        // Verify all IDs are in range
+        locksInRange.forEach(lock => {
+          const id = lock.account.id.toNumber();
+          expect(id).to.be.greaterThanOrEqual(startId);
+          expect(id).to.be.lessThan(endId);
+        });
+
+        // Verify they are sorted by ID ascending
+        for (let i = 0; i < locksInRange.length - 1; i++) {
+          expect(locksInRange[i].account.id.toNumber()).to.be.lessThan(
+            locksInRange[i + 1].account.id.toNumber()
+          );
+        }
+      }
+    });
+
+    it("should maintain sequential IDs across multiple users", async () => {
+      const totalBefore = await lockFetcher.getTotalLockCount();
+      const unlockTimestamp = new anchor.BN(Math.floor(Date.now() / 1000) + 3600);
+      const amount = new anchor.BN(30_000_000);
+
+      // Create locks from different users
+      const lockId1 = await createLock(user1, user1TokenAccount1, mint1, amount, unlockTimestamp);
+      const lockId2 = await createLock(user2, user2TokenAccount1, mint1, amount, unlockTimestamp);
+      const lockId3 = await createLock(user3, user3TokenAccount1, mint1, amount, unlockTimestamp);
+      const lockId4 = await createLock(user1, user1TokenAccount2, mint2, amount, unlockTimestamp);
+
+      // Verify IDs are sequential regardless of user
+      expect(lockId2).to.equal(lockId1 + 1);
+      expect(lockId3).to.equal(lockId2 + 1);
+      expect(lockId4).to.equal(lockId3 + 1);
+
+      // Verify each lock has the correct ID stored
+      const lock1 = await program.account.lock.fetch(getLockPda(lockId1));
+      const lock2 = await program.account.lock.fetch(getLockPda(lockId2));
+      const lock3 = await program.account.lock.fetch(getLockPda(lockId3));
+      const lock4 = await program.account.lock.fetch(getLockPda(lockId4));
+
+      expect(lock1.id.toNumber()).to.equal(lockId1);
+      expect(lock2.id.toNumber()).to.equal(lockId2);
+      expect(lock3.id.toNumber()).to.equal(lockId3);
+      expect(lock4.id.toNumber()).to.equal(lockId4);
+
+      // Verify global counter matches
+      const totalAfter = await lockFetcher.getTotalLockCount();
+      expect(totalAfter).to.equal(totalBefore + 4);
+    });
+
+    it("should allow fetching latest locks even when some are unlocked", async () => {
+      const totalBefore = await lockFetcher.getTotalLockCount();
+      const unlockTimestamp = new anchor.BN(Math.floor(Date.now() / 1000) + 3600);
+      const amount = new anchor.BN(20_000_000);
+
+      // Create 3 locks
+      const lockId1 = await createLock(user1, user1TokenAccount1, mint1, amount, unlockTimestamp);
+      const lockId2 = await createLock(user1, user1TokenAccount1, mint1, amount, unlockTimestamp);
+      const lockId3 = await createLock(user1, user1TokenAccount1, mint1, amount, unlockTimestamp);
+
+      // Verify total count is correct
+      const totalAfter = await lockFetcher.getTotalLockCount();
+      expect(totalAfter).to.equal(totalBefore + 3);
+
+      // Fetch the 5 most recent locks (should include our 3 new ones)
+      const latest5 = await lockFetcher.fetchLatestLocks(5);
+      expect(latest5.length).to.equal(5);
+      
+      // Verify they are sorted by ID descending (highest ID = most recent)
+      for (let i = 0; i < latest5.length - 1; i++) {
+        expect(latest5[i].account.id.toNumber()).to.be.greaterThan(
+          latest5[i + 1].account.id.toNumber()
+        );
+      }
+      
+      // Verify our newly created locks are in the latest locks
+      const ids = latest5.map(l => l.account.id.toNumber());
+      expect(ids).to.include(lockId1);
+      expect(ids).to.include(lockId2);
+      expect(ids).to.include(lockId3);
+      
+      // Verify the most recent lock is lockId3 (the last one we created)
+      expect(latest5[0].account.id.toNumber()).to.equal(lockId3);
+    });
+
+    it("should handle edge case: fetch latest locks when count > total locks", async () => {
+      const totalCount = await lockFetcher.getTotalLockCount();
+      
+      // Try to fetch more locks than exist
+      const latest100 = await lockFetcher.fetchLatestLocks(100);
+      
+      // Should return at most totalCount locks
+      expect(latest100.length).to.be.lessThanOrEqual(totalCount);
+      expect(latest100.length).to.be.greaterThan(0);
     });
   });
 });
